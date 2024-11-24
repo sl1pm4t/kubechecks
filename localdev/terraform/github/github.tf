@@ -188,3 +188,25 @@ resource "github_repository_file" "pr6_change" {
   commit_message      = "pr6 - update ${each.key}"
   overwrite_on_create = true
 }
+
+
+// ----------------------
+
+resource "github_branch" "pr7_change" {
+  repository = github_repository.kubechecks.name
+  branch    = "pr7-change"
+  source_sha     = data.github_branch.head.sha
+
+  depends_on = [github_repository_file.base_files]
+}
+
+resource "github_repository_file" "pr7_change" {
+  for_each = module.vcs_files.mr_files[7]
+
+  repository             = github_repository.kubechecks.name
+  file           = each.key
+  branch              = github_branch.pr7_change.branch
+  content             = each.value
+  commit_message      = "pr7 - update ${each.key}"
+  overwrite_on_create = true
+}

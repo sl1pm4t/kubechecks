@@ -25,6 +25,7 @@ allow_k8s_contexts([
   'kind-kind',
   'docker-desktop',
   'minikube',
+  'orbstack',
 ])
 
 k8s_namespace='kubechecks'

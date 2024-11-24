@@ -28,5 +28,8 @@ output "mr_files" {
     6 = {
       for f in fileset("${path.module}/mr6_files", "**/*") : f => file("${path.module}/mr6_files/${f}")
     }
+    7 = {
+      for f in fileset("${path.module}/mr7_files", "**/*") : f => file("${path.module}/mr7_files/${f}")
+    }
   }
 }

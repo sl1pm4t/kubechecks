@@ -13,7 +13,7 @@ def install_test_apps(cfg):
         projectUrl=str(read_file(vcsPath, "")).strip('\n')
         print("Remote Project URL: " + projectUrl)
 
-        for app in ["echo-server", "httpbin", "app-root"]:
+        for app in ["echo-server", "httpbin", "app-root", "multi-source-helm-chart"]:
             print("Creating Test App: " + app)
 
             # read the application YAML and patch the repoURL
@@ -21,7 +21,15 @@ def install_test_apps(cfg):
 
             for o in objects:
               o['metadata']['namespace'] = "kubechecks"
-              o['spec']['source']['repoURL'] = projectUrl
+
+              if 'source' in o['spec']:
+                o['spec']['source']['repoURL'] = projectUrl
+
+              if 'sources' in o['spec']:
+                for src in o['spec']['sources']:
+                  if src['repoURL'] == '${REPO_URL}':
+                    src['repoURL'] = projectUrl
+
             k8s_yaml(encode_yaml_stream(objects))
 
             k8s_resource(
