@@ -75,7 +75,7 @@ func (a *ArgocdMatcher) AffectedApps(_ context.Context, changeList []string, tar
 		return AffectedItems{}, nil
 	}
 
-	appsSlice := a.appsDirectory.FindAppsBasedOnChangeList(changeList, targetBranch)
+	appsSlice := a.appsDirectory.FindAppsBasedOnChangeList(changeList, targetBranch, repo)
 	appSetsSlice := a.appSetsDirectory.FindAppsBasedOnChangeList(changeList, repo)
 
 	// and return both apps and appSets

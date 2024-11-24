@@ -7,6 +7,7 @@ import (
 
 	"github.com/argoproj/argo-cd/v2/pkg/apis/application/v1alpha1"
 	"github.com/stretchr/testify/assert"
+	"github.com/zapier/kubechecks/pkg/git"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -49,55 +50,91 @@ func TestPathsAreJoinedProperly(t *testing.T) {
 	}, rad.appFiles)
 }
 
+const testVCSRepoURL = "https://github.com/foo/helm-values.git"
+
 func TestShouldInclude(t *testing.T) {
 	testcases := []struct {
-		vcsMergeTarget  string
-		argocdAppBranch string
-		expected        bool
+		app            v1alpha1.Application
+		vcsMergeTarget string
+		repoUrl        string
+		expected       bool
 	}{
 		{
-			vcsMergeTarget:  "some-branch",
-			argocdAppBranch: "some-branch",
-			expected:        true,
+			app:            testCreateSingleSourceApplication("some-branch"),
+			vcsMergeTarget: "some-branch",
+			expected:       true,
 		},
 		{
-			vcsMergeTarget:  "some-branch",
-			argocdAppBranch: "some-other-branch",
-			expected:        false,
+			app:            testCreateSingleSourceApplication("some-other-branch"),
+			vcsMergeTarget: "some-branch",
+			expected:       false,
 		},
 		{
-			argocdAppBranch: "HEAD",
-			vcsMergeTarget:  "main",
-			expected:        true,
+			app:            testCreateSingleSourceApplication("HEAD"),
+			vcsMergeTarget: "main",
+			expected:       true,
 		},
 		{
-			argocdAppBranch: "HEAD",
-			vcsMergeTarget:  "master",
-			expected:        true,
+			app:            testCreateSingleSourceApplication("HEAD"),
+			vcsMergeTarget: "master",
+			expected:       true,
 		},
 		{
-			argocdAppBranch: "HEAD",
-			vcsMergeTarget:  "other",
-			expected:        false,
+			app:            testCreateSingleSourceApplication("HEAD"),
+			vcsMergeTarget: "other",
+			expected:       false,
 		},
 		{
-			argocdAppBranch: "",
-			vcsMergeTarget:  "branch",
-			expected:        true,
+			app:            testCreateSingleSourceApplication(""),
+			vcsMergeTarget: "branch",
+			expected:       true,
+		},
+		{
+			app:            testCreateHelmChartMultiSourceApplication("https://chart.foo.com", "branch", testVCSRepoURL),
+			vcsMergeTarget: "branch",
+			repoUrl:        testVCSRepoURL,
+			expected:       true,
 		},
 	}
 
 	for _, tc := range testcases {
 		t.Run(fmt.Sprintf("%v", tc), func(t *testing.T) {
-			actual := shouldInclude(v1alpha1.Application{
-				Spec: v1alpha1.ApplicationSpec{
-					Source: &v1alpha1.ApplicationSource{
-						TargetRevision: tc.argocdAppBranch,
-					},
-				},
-			}, tc.vcsMergeTarget)
+			actual := shouldInclude(tc.app, tc.vcsMergeTarget, &git.Repo{
+				CloneURL: tc.repoUrl,
+			})
 			assert.Equal(t, tc.expected, actual)
 		})
+	}
+}
+
+func testCreateSingleSourceApplication(targetRevision string) v1alpha1.Application {
+	return v1alpha1.Application{
+		Spec: v1alpha1.ApplicationSpec{
+			Source: &v1alpha1.ApplicationSource{
+				TargetRevision: targetRevision,
+			},
+		},
+	}
+}
+
+func testCreateHelmChartMultiSourceApplication(chartSource, valuesTargetRevision, valuesRepoUrl string) v1alpha1.Application {
+	return v1alpha1.Application{
+		Spec: v1alpha1.ApplicationSpec{
+			Sources: []v1alpha1.ApplicationSource{{
+				// Helm Chart Source
+				RepoURL:        chartSource,
+				TargetRevision: "v1.2.3",
+				Helm:           nil,
+				Chart:          "httpbin",
+			}, {
+				// Values Source from VCS
+				RepoURL:        valuesRepoUrl,
+				TargetRevision: valuesTargetRevision,
+				Path:           "path/to/values.yaml",
+				Ref:            "values",
+			},
+			},
+		},
 	}
 }
 

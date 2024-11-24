@@ -6,6 +6,7 @@ import (
 
 	"github.com/argoproj/argo-cd/v2/pkg/apis/application/v1alpha1"
 	"github.com/rs/zerolog/log"
+	"github.com/zapier/kubechecks/pkg/git"
 )
 
 type AppDirectory struct {
@@ -64,7 +65,7 @@ func (d *AppDirectory) ProcessApp(app v1alpha1.Application) {
 // changeList: a slice of strings representing the paths of modified files.
 // targetBranch: the branch name to compare against the target revision of the applications.
 // e.g. changeList = ["path/to/file1", "path/to/file2"]
-func (d *AppDirectory) FindAppsBasedOnChangeList(changeList []string, targetBranch string) []v1alpha1.Application {
+func (d *AppDirectory) FindAppsBasedOnChangeList(changeList []string, targetBranch string, repo *git.Repo) []v1alpha1.Application {
 	log.Debug().Msgf("checking %d changes", len(changeList))
 
 	appsSet := make(map[string]struct{})
@@ -96,8 +97,8 @@ func (d *AppDirectory) FindAppsBasedOnChangeList(changeList []string, targetBran
 			continue
 		}
 
-		if !shouldInclude(app, targetBranch) {
-			log.Debug().Msgf("target revision of %s is %s and does not match '%s'", appName, getTargetRevision(app), targetBranch)
+		if !shouldInclude(app, targetBranch, repo) {
+			log.Debug().Msgf("target revision of %s is %s and does not match '%s'", appName, getTargetRevision(app, repo), targetBranch)
 			continue
 		}
 
@@ -108,16 +109,29 @@ func (d *AppDirectory) FindAppsBasedOnChangeList(changeList []string, targetBran
 	return appsSlice
 }
 
-func getTargetRevision(app v1alpha1.Application) string {
-	return app.Spec.GetSource().TargetRevision
+func getTargetRevision(app v1alpha1.Application, repo *git.Repo) string {
+	if app.Spec.GetSources() != nil {
+		for _, source := range app.Spec.GetSources() {
+			if source.Chart != "" {
+				log.Debug().Msgf("ignoring helm chart source %s %s", source.RepoURL, source.Chart)
+				continue
+			}
+			if source.RepoURL == repo.CloneURL {
+				return source.TargetRevision
+			}
+		}
+	} else {
+		return app.Spec.GetSource().TargetRevision
+	}
+	return ""
 }
 
 func getSourcePath(app v1alpha1.Application) string {
 	return app.Spec.GetSource().Path
 }
 
-func shouldInclude(app v1alpha1.Application, targetBranch string) bool {
-	targetRevision := getTargetRevision(app)
+func shouldInclude(app v1alpha1.Application, targetBranch string, repo *git.Repo) bool {
+	targetRevision := getTargetRevision(app, repo)
 	if targetRevision == "" {
 		return true
 	}
