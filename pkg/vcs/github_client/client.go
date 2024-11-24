@@ -274,7 +274,8 @@ func parseRepo(cloneUrl string) (string, string) {
 	path = strings.TrimSuffix(path, ".git")
 	parts := strings.Split(path, "/")
 	if len(parts) != 2 {
-		panic(fmt.Errorf("%s: invalid path", cloneUrl))
+		log.Warn().Msgf("repo cloneUrl is not a valid git address")
+		return "", ""
 	}
 
 	owner := parts[0]
@@ -284,6 +285,10 @@ func parseRepo(cloneUrl string) (string, string) {
 
 func (c *Client) GetHookByUrl(ctx context.Context, ownerAndRepoName, webhookUrl string) (*vcs.WebHookConfig, error) {
 	owner, repoName := parseRepo(ownerAndRepoName)
+	if owner == "" || repoName == "" {
+		// does not appear to be a Git Repo, ignoring.
+		return nil, nil
+	}
 	items, _, err := c.googleClient.Repositories.ListHooks(ctx, owner, repoName, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to list hooks")
