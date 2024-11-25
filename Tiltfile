@@ -190,7 +190,7 @@ earthly_build(
         '--KUBECONFORM_VERSION='+tool_versions.get('kubeconform'),
         '--KUSTOMIZE_VERSION='+tool_versions.get('kustomize'),
         '--STATICCHECK_VERSION='+tool_versions.get('staticcheck'),
-        '--GIT_COMMIT='+git_commit,
+        # '--GIT_COMMIT='+git_commit,
         ],
 )
 
@@ -216,6 +216,7 @@ helm_resource(name='kubechecks',
               namespace= k8s_namespace,
               flags=[
                 '--values=./localdev/kubechecks/values.yaml',
+                '--set=argocd.namespace=' + k8s_namespace,
                 '--set=configMap.env.KUBECHECKS_WEBHOOK_URL_BASE=' + get_ngrok_url(cfg),
                 '--set=configMap.env.NGROK_URL=' + get_ngrok_url(cfg),
                 '--set=configMap.env.KUBECHECKS_ARGOCD_WEBHOOK_URL=' + get_ngrok_url(cfg) +'/argocd/api/webhook',

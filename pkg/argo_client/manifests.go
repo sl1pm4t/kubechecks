@@ -2,6 +2,7 @@ package argo_client
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -21,11 +22,14 @@ import (
 	"github.com/argoproj/argo-cd/v2/util/db"
 	argosettings "github.com/argoproj/argo-cd/v2/util/settings"
 	"github.com/argoproj/argo-cd/v2/util/tgzstream"
+	"github.com/kr/pretty"
+	helmclient "github.com/mittwald/go-helm-client"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/zapier/kubechecks/pkg"
 	"github.com/zapier/kubechecks/pkg/git"
 	"github.com/zapier/kubechecks/pkg/vcs"
+	"helm.sh/helm/v3/pkg/action"
 )
 
 type getRepo func(ctx context.Context, cloneURL string, branchName string) (*git.Repo, error)
@@ -46,7 +50,7 @@ func (a *ArgoClient) GetManifests(ctx context.Context, name string, app v1alpha1
 
 	var manifests []string
 	for _, source := range contents {
-		moreManifests, err := a.generateManifests(ctx, app, source, refs, pullRequest, getRepo)
+		moreManifests, err := a.generateManifests(ctx, app, source, refs, pullRequest, getRepo, getHelmRepoFn(source))
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to generate manifests")
 		}
@@ -55,6 +59,56 @@ func (a *ArgoClient) GetManifests(ctx context.Context, name string, app v1alpha1
 
 	getManifestsSuccess.WithLabelValues(name).Inc()
 	return manifests, nil
+}
+
+func getHelmRepoFn(source v1alpha1.ApplicationSource) func(ctx context.Context, cloneURL string, branchName string) (*git.Repo, error) {
+	return func(ctx context.Context, cloneURL string, branchName string) (*git.Repo, error) {
+		log.Info().Str("cloneURL", cloneURL).Str("branchName", branchName).Msg("getting helm repo")
+		var outputBuffer bytes.Buffer
+
+		tmpDir, err := os.MkdirTemp("/tmp", "kubechecks-helm-")
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to make temp dir")
+		}
+
+		opt := &helmclient.Options{
+			Namespace:       "none", // Change this to the namespace you wish the client to operate in.
+			RepositoryCache: tmpDir,
+			Debug:           false,
+			Linting:         false,
+			DebugLog:        func(format string, v ...interface{}) { log.Debug().Msgf(format, v) },
+			Output:          &outputBuffer, // Not mandatory, leave open for default os.Stdout
+		}
+
+		helmClient, err := helmclient.New(opt)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create helm client")
+		}
+
+		getOpts := &action.ChartPathOptions{
+			RepoURL: source.RepoURL,
+			Version: source.TargetRevision,
+		}
+		chart, _, err := helmClient.GetChart(source.Chart, getOpts)
+		if err != nil {
+			log.Error().Err(err).Msg("unable to get chart")
+			return nil, errors.Wrap(err, "unable to get chart")
+		}
+
+		for _, file := range chart.Files {
+			err := os.WriteFile(filepath.Join(tmpDir, source.Chart, file.Name), file.Data, 0755)
+			if err != nil {
+				log.Error().Err(err).Msg("unable to write file")
+			}
+		}
+
+		return &git.Repo{
+			BranchName: branchName,
+			//Config:     config.ServerConfig{},
+			CloneURL:  cloneURL,
+			Directory: tmpDir,
+		}, nil
+	}
 }
 
 func (a *ArgoClient) preprocessSources(app *v1alpha1.Application, pullRequest vcs.PullRequest) ([]v1alpha1.ApplicationSource, []v1alpha1.ApplicationSource) {
@@ -82,11 +136,18 @@ func (a *ArgoClient) preprocessSources(app *v1alpha1.Application, pullRequest vc
 	return contentSources, refSources
 }
 
-func (a *ArgoClient) generateManifests(ctx context.Context, app v1alpha1.Application, source v1alpha1.ApplicationSource, refs []v1alpha1.ApplicationSource, pullRequest vcs.PullRequest, getRepo func(ctx context.Context, cloneURL string, branchName string) (*git.Repo, error)) ([]string, error) {
+func (a *ArgoClient) generateManifests(
+	ctx context.Context,
+	app v1alpha1.Application,
+	source v1alpha1.ApplicationSource,
+	refs []v1alpha1.ApplicationSource,
+	pullRequest vcs.PullRequest,
+	getRepo func(ctx context.Context, cloneURL string, branchName string) (*git.Repo, error),
+	getHelmRepo func(ctx context.Context, cloneURL string, branchName string) (*git.Repo, error)) ([]string, error) {
 	// multisource apps must adhere to the following rules:
 	// 1. first source must be a non-ref source
 	// 2. there must be one and only one non-ref source
-	// 3. ref sources that match the pull requests's repo and target branch need to have their target branch swapped to the head branch of the pull request
+	// 3. ref sources that match the pull requests repo and target branch need to have their target branch swapped to the head branch of the pull request
 
 	clusterCloser, clusterClient := a.GetClusterClient()
 	defer clusterCloser.Close()
@@ -116,9 +177,39 @@ func (a *ArgoClient) generateManifests(ctx context.Context, app v1alpha1.Applica
 	}
 
 	log.Info().Msg("get repo")
-	repo, err := getRepo(ctx, source.RepoURL, repoTarget)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to get repo")
+	var repo *git.Repo
+	if source.Chart != "" {
+		//repo, err = getHelmRepo(ctx, source.RepoURL, repoTarget)
+		//if err != nil {
+		//	return nil, errors.Wrap(err, "failed to get helm repo")
+		//}
+
+		tmpDir, err := os.MkdirTemp("/tmp", "kubechecks-helm-")
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to make temp dir")
+		}
+		cd, err := a.repoClient.GetRevisionChartDetails(ctx, &repoapiclient.RepoServerRevisionChartDetailsRequest{
+			Repo:     &v1alpha1.Repository{Repo: source.RepoURL},
+			Name:     source.Chart,
+			Revision: source.TargetRevision,
+		})
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get helm repo")
+		}
+
+		fmt.Println(pretty.Sprint(cd))
+
+		repo = &git.Repo{
+			BranchName: source.TargetRevision,
+			CloneURL:   source.RepoURL,
+			Directory:  tmpDir,
+		}
+
+	} else {
+		repo, err = getRepo(ctx, source.RepoURL, repoTarget)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get repo")
+		}
 	}
 
 	log.Info().Msg("packaging app")
@@ -173,7 +264,7 @@ func (a *ArgoClient) generateManifests(ctx context.Context, app v1alpha1.Applica
 		return nil, fmt.Errorf("error getting settings enabled source types: %w", err)
 	}
 
-	refSources, err := argo.GetRefSources(context.Background(), app.Spec, argoDB)
+	refSources, err := argo.GetRefSources(context.Background(), refs, app.Spec.Project, nil, []string{}, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get ref sources: %w", err)
 	}
